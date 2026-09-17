@@ -1,0 +1,23 @@
+name: huijin-daily
+on:
+  schedule:
+    - cron: "50 15 * * 1-5"     # UTC 15:50 = 北京 23:50, 周一到周五
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: run monitor
+        run: python huijin_monitor.py
+      - name: commit
+        run: |
+          git config user.name "huijin-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add latest.md reports szse_snapshots.csv
+          git commit -m "daily $(date -u +%F)" || echo "nothing to commit"
+          git push

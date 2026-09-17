@@ -4,13 +4,27 @@ jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - name: probe sources
+      - name: probe sources (curl)
+        shell: bash {0}
         run: |
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
-          echo "SSE (with Referer):"; curl -s -m 20 -A "$UA" -H "Referer: http://www.sse.com.cn/" -o /tmp/sse.txt -w "%{http_code}\n" "http://query.sse.com.cn/commonQuery.do?isPagination=true&pageHelp.pageSize=2&pageHelp.pageNo=1&pageHelp.beginPage=1&pageHelp.endPage=1&sqlId=COMMON_SSE_ZQPZ_ETFZL_XXPL_ETFGM_SEARCH_L&STAT_DATE=2026-09-17"; head -c 200 /tmp/sse.txt; echo
-          echo "SSE https:"; curl -s -m 20 -A "$UA" -H "Referer: https://www.sse.com.cn/" -o /tmp/sse2.txt -w "%{http_code}\n" "https://query.sse.com.cn/commonQuery.do?isPagination=true&pageHelp.pageSize=2&pageHelp.pageNo=1&pageHelp.beginPage=1&pageHelp.endPage=1&sqlId=COMMON_SSE_ZQPZ_ETFZL_XXPL_ETFGM_SEARCH_L&STAT_DATE=2026-09-17"; head -c 200 /tmp/sse2.txt; echo
-          echo "SZSE:"; curl -s -m 20 -A "$UA" -H "Referer: http://www.szse.cn/" -o /tmp/szse.txt -w "%{http_code}\n" "http://www.szse.cn/api/report/ShowReport/data?SHOWTYPE=JSON&CATALOGID=1945&TABKEY=tab1&PAGENO=1&txtQueryKeyAndJC=159915&random=0.1"; head -c 200 /tmp/szse.txt; echo
-          echo "CFFEX:"; curl -s -m 20 -A "$UA" -H "Referer: http://www.cffex.com.cn/ccpm/" -o /tmp/cf.xml -w "%{http_code} %{size_download}\n" "http://www.cffex.com.cn/sj/ccpm/202609/17/IF.xml"
-          echo "Tencent:"; curl -s -m 20 -A "$UA" -o /tmp/tx.txt -w "%{http_code} %{size_download}\n" "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh000001,day,2026-09-01,2026-09-18,10,qfq"
-          echo "Eastmoney push2:"; curl -s -m 20 -A "$UA" -o /tmp/em.txt -w "%{http_code}\n" "https://push2.eastmoney.com/api/qt/stock/get?secid=1.510300&fields=f57,f58,f84,f85"; head -c 200 /tmp/em.txt; echo
-          echo "Sina hq:"; curl -s -m 20 -A "$UA" -H "Referer: https://finance.sina.com.cn/" -o /tmp/sina.txt -w "%{http_code}\n" "https://hq.sinajs.cn/list=sh510300"; head -c 200 /tmp/sina.txt; echo
+          p() { echo "== $1"; curl -s -m 20 -A "$UA" -H "Referer: $2" -o /tmp/o.txt -w "http %{http_code} bytes %{size_download}\n" "$3"; head -c 160 /tmp/o.txt; echo; }
+          p "SZSE https" "https://www.szse.cn/" "https://www.szse.cn/api/report/ShowReport/data?SHOWTYPE=JSON&CATALOGID=1945&TABKEY=tab1&PAGENO=1&txtQueryKeyAndJC=159915&random=0.1"
+          p "CFFEX" "http://www.cffex.com.cn/ccpm/" "http://www.cffex.com.cn/sj/ccpm/202609/17/IF.xml"
+          p "Tencent" "" "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh000001,day,2026-09-01,2026-09-18,10,qfq"
+          p "Eastmoney" "" "https://push2.eastmoney.com/api/qt/stock/get?secid=1.510300&fields=f57,f58,f84,f85"
+          p "Sina" "https://finance.sina.com.cn/" "https://hq.sinajs.cn/list=sh510300"
+          p "SSE http" "http://www.sse.com.cn/" "http://query.sse.com.cn/commonQuery.do?isPagination=true&pageHelp.pageSize=2&pageHelp.pageNo=1&pageHelp.beginPage=1&pageHelp.endPage=1&sqlId=COMMON_SSE_ZQPZ_ETFZL_XXPL_ETFGM_SEARCH_L&STAT_DATE=2026-09-17"
+      - name: probe SSE with python urllib variants
+        shell: bash {0}
+        run: |
+          python3 - <<'PY'
+          import urllib.request
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
+          url="http://query.sse.com.cn/commonQuery.do?isPagination=true&pageHelp.pageSize=2&pageHelp.pageNo=1&pageHelp.beginPage=1&pageHelp.endPage=1&sqlId=COMMON_SSE_ZQPZ_ETFZL_XXPL_ETFGM_SEARCH_L&STAT_DATE=2026-09-17"
+          for name,h in [("UA+Referer",{"User-Agent":UA,"Referer":"http://www.sse.com.cn/"}),("+Accept",{"User-Agent":UA,"Referer":"http://www.sse.com.cn/","Accept":"*/*"}),("+Accept+Lang",{"User-Agent":UA,"Referer":"http://www.sse.com.cn/","Accept":"*/*","Accept-Language":"zh-CN,zh;q=0.9"}),("https +Accept",{"User-Agent":UA,"Referer":"https://www.sse.com.cn/","Accept":"*/*"})]:
+              u=url if not name.startswith("https") else url.replace("http://","https://")
+              try:
+                  r=urllib.request.urlopen(urllib.request.Request(u,headers=h),timeout=20); print(name,"OK",r.read()[:80])
+              except Exception as e: print(name,"ERR",repr(e)[:100])
+          PY

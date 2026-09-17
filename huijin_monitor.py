@@ -42,9 +42,18 @@ FUT_BIG = 5000         # 2.0 原文: 空单/多单 ≥5000 手
 PRODUCTS = ["IH", "IF", "IC", "IM"]
 TYPES = {"0": "vol", "1": "long", "2": "short"}
 
-def http_get(url, referer=None, timeout=30):
-    req = urllib.request.Request(url, headers={"User-Agent": UA, **({"Referer": referer} if referer else {})})
-    return OPENER.open(req, timeout=timeout).read()
+def http_get(url, referer=None, timeout=30, retries=3):
+    """带重试: 上交所偶尔对某些出口 IP 返回 403, 等一会再试通常就好."""
+    import time, random
+    last = None
+    for i in range(retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*", "Accept-Language": "zh-CN,zh;q=0.9", **({"Referer": referer} if referer else {})})
+            return OPENER.open(req, timeout=timeout).read()
+        except Exception as e:
+            last = e
+            if i < retries - 1: time.sleep(15 + random.random() * 10)
+    raise last
 
 # ---------------- 上交所 ----------------
 def sse_shares(day):

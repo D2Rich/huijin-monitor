@@ -1,7 +1,8 @@
 name: huijin-daily
 on:
   schedule:
-    - cron: "50 15 * * 1-5"     # UTC 15:50 = 北京 23:50, 周一到周五
+    - cron: "30 16 * * 1-5"     # UTC 16:30 = 北京 00:30, 取当天(UTC日期=交易日)的份额
+    - cron: "0 22 * * 1-5"      # UTC 22:00 = 北京 06:00, 补跑一次 (UTC 日期仍是交易日)
   workflow_dispatch:
   push:
     branches: [master]

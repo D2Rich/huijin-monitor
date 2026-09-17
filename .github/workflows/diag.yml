@@ -1,5 +1,5 @@
 name: diag
-on: { workflow_dispatch: {} , push: { paths: ['.github/workflows/diag.yml'] } }
+on: { workflow_dispatch: {} }
 jobs:
   diag:
     runs-on: ubuntu-latest

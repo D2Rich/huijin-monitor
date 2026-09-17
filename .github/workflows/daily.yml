@@ -3,6 +3,9 @@ on:
   schedule:
     - cron: "50 15 * * 1-5"     # UTC 15:50 = 北京 23:50, 周一到周五
   workflow_dispatch:
+  push:
+    branches: [master]
+    paths: ['huijin_monitor.py', '.github/workflows/daily.yml']
 permissions:
   contents: write
 jobs:

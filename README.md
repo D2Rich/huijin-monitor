@@ -23,3 +23,6 @@ schtasks /Create /SC DAILY /TN "HuijinMonitor" /TR "\"E:\Claude\huijin_monitor\r
 ## 数据更新时间（实测）
 - 上交所 ETF 份额：当日 23:15 前后可查当日；深交所：只给当前值，脚本每晚快照到 `szse_snapshots.csv`。
 - 中金所持仓排名：收盘后 17:00 前后。
+
+## 日报地址
+https://raw.githubusercontent.com/D2Rich/huijin-monitor/master/latest.md

@@ -10,7 +10,7 @@
   指数日线         腾讯 ifzq.gtimg.cn (上证 MA20 判行情, MA360)
 规则口径: 全部来自 UP 主视频/日更 (见 README), 倍量基准 = 2025 年末峰值总份额 × 0.1%, 期货 300 手 = 一倍量
 """
-import os, sys, json, csv, datetime, urllib.request, urllib.parse, xml.etree.ElementTree as ET
+import os, sys, json, csv, datetime, urllib.request, urllib.parse, urllib.error, xml.etree.ElementTree as ET
 from collections import defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -50,6 +50,10 @@ def http_get(url, referer=None, timeout=30, retries=3):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*", "Accept-Language": "zh-CN,zh;q=0.9", **({"Referer": referer} if referer else {})})
             return OPENER.open(req, timeout=timeout).read()
+        except urllib.error.HTTPError as e:
+            last = e
+            if e.code == 404: raise          # 非交易日/未发布, 不必重试
+            if i < retries - 1: time.sleep(15 + random.random() * 10)
         except Exception as e:
             last = e
             if i < retries - 1: time.sleep(15 + random.random() * 10)
@@ -80,7 +84,7 @@ def szse_current(code):
     url = ("http://www.szse.cn/api/report/ShowReport/data?SHOWTYPE=JSON&CATALOGID=1945&TABKEY=tab1&PAGENO=1"
            f"&txtQueryKeyAndJC={code}&random=0.{datetime.datetime.now().microsecond}")
     try:
-        j = json.loads(http_get(url, referer="http://www.szse.cn/"))
+        j = json.loads(http_get(url, referer="http://www.szse.cn/", retries=1))   # GitHub 服务器上深交所会被拒, 不重试
         for r in j[0].get("data") or []:
             import re
             c = re.sub("<[^>]+>", "", r["sys_key"])
@@ -168,7 +172,7 @@ def main(day=None):
     prevs = prev_trading_days(day, 4)
     prev = prevs[0]
     sh_prev = sse_shares(prev)
-    lines = [f"# 助力汇金日报  数据日 {day}  (生成于 {datetime.datetime.now():%Y-%m-%d %H:%M})", ""]
+    lines = [f"# 助力汇金日报  数据日 {day}", ""]
 
     # ---- 行情判定 ----
     idx = index_daily()
@@ -267,4 +271,8 @@ def main(day=None):
     sys.stdout.reconfigure(encoding="utf-8"); print(text)
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else None)
+    if "--snapshot-only" in sys.argv:
+        snaps = szse_snapshot_take(datetime.date.today().isoformat())
+        print("深交所快照:", {d: v for d, v in snaps.items() if d >= (datetime.date.today() - datetime.timedelta(days=2)).isoformat()})
+    else:
+        main(next((a for a in sys.argv[1:] if not a.startswith("--")), None))

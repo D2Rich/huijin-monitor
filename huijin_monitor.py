@@ -91,7 +91,7 @@ def tencent_estimate(code):
     """腾讯行情: 总市值(亿元, 两位小数)/价格 = 份额(亿份), 精度约 ±0.1 亿份; 返回 (万份, 行情日期)."""
     b = http_get(f"https://qt.gtimg.cn/q=sz{code}", timeout=15, retries=2).decode("gbk", "ignore")
     f = b.split("~"); price = float(f[3]); cap = float(f[44]); ts = f[30]
-    return round(cap / price * 1e4, 2), f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
+    return round(cap / price * 1e4, 2), f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}", ts[8:14]
 def szse_snapshot_load(with_source=False):
     snaps = {}; src = {}
     if os.path.exists(SNAP):
@@ -120,10 +120,12 @@ def szse_snapshot_take(day, days_back=20):
         for code, (name, ex, base, A) in ETF.items():
             if ex != "SZSE" or src.get(day, {}).get(code) == "szse": continue
             try:
-                v, asof = tencent_estimate(code)
+                v, asof, tm = tencent_estimate(code)
                 prev_days = sorted(d for d in snaps if d < day and code in snaps[d])
                 pv = snaps[prev_days[-1]][code] if prev_days else None
-                if asof == day and not (pv and abs(v - pv) / pv < 1e-5):   # 与前一日完全相同 = 深交所还没发布, 腾讯只是镜像旧值
+                # 腾讯的份额是"最近一次发布值": 行情日=day 时对应 day; 若已到下一交易日且未收盘(15:00 前), 仍对应 day
+                usable = asof == day or (asof > day and tm < "150000")
+                if usable and not (pv and abs(v - pv) / pv < 1e-5):   # 与前一日完全相同 = 深交所还没发布, 腾讯只是镜像旧值
                     snaps.setdefault(day, {})[code] = v; src.setdefault(day, {})[code] = "tencent"
                     print(f"  {code} 用腾讯估算 {v:.0f} 万份 (≈)")
             except Exception as e:

@@ -2,6 +2,10 @@
 
 每天 23:45 运行 `run.bat`（或 `python huijin_monitor.py`），生成 `latest.md` 和 `reports/日期.md`，内容可直接粘贴给 ChatGPT。
 
+## 云端与本机的分工
+GitHub Actions 每个交易日北京 00:30 与 06:00 各跑一次，电脑关机也能出日报：上交所、中金所、腾讯指数在 GitHub 服务器上可直接抓；
+深交所拒绝数据中心 IP，云端用仓库里的 `szse_snapshots.csv`（本机任务每晚 23:45 用深交所历史接口刷新并推送）+ 腾讯行情总市值估算（≈，精度约 ±0.1 亿份）兜底。
+
 ## 为什么不让 ChatGPT 自己抓
 上交所份额接口 `query.sse.com.cn/commonQuery.do` 必须带 `Referer: http://www.sse.com.cn/`，否则返回 `System Error`；
 上交所网页本身是 JS 渲染的。ChatGPT 的浏览工具不能自定义请求头，所以永远读不到当天数据（中金所的 XML 不需要请求头，它能读）。
@@ -21,7 +25,7 @@ schtasks /Create /SC DAILY /TN "HuijinMonitor" /TR "\"E:\Claude\huijin_monitor\r
 - 执行：信号日 T，在 T+1 或 T+2 尾盘操作；仓位上限 = 沪深300ETF 汇金区间上限。
 
 ## 数据更新时间（实测）
-- 上交所 ETF 份额：当日 23:15 前后可查当日；深交所：只给当前值，脚本每晚快照到 `szse_snapshots.csv`。
+- 上交所 ETF 份额：当日 22:50 前后可查当日；深交所 ETF规模 历史接口（`scsj_fund_jjgm`，可查 6 个月）约 23:15–23:20 发布当日。
 - 中金所持仓排名：收盘后 17:00 前后。
 
 ## 日报地址

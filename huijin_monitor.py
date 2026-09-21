@@ -5,7 +5,7 @@
        python huijin_monitor.py 2026-09-17  # 指定日期
 数据源 (均为官方公开接口):
   上交所 ETF 份额  query.sse.com.cn  (需要 Referer 头, 这是 ChatGPT 直接抓取失败的原因)
-  深交所 ETF 份额  szse.cn  (只给当前值, 本脚本每天快照到 szse_snapshots.csv 后自行做差)
+  深交所 ETF 份额  szse.cn 历史接口 scsj_fund_jjgm (可查 6 个月; 拒绝数据中心 IP, GitHub 上用本地推送的缓存 + 腾讯估算兜底)
   中金所 持仓排名  cffex.com.cn  (IF/IH/IC/IM 四个 XML)
   指数日线         腾讯 ifzq.gtimg.cn (上证 MA20 判行情, MA360)
 规则口径: 全部来自 UP 主视频/日更 (见 README), 倍量基准 = 2025 年末峰值总份额 × 0.1%, 期货 300 手 = 一倍量
@@ -78,42 +78,57 @@ def sse_shares(day):
         json.dump(rows, open(f, "w", encoding="utf-8"))
     return rows or None
 
-# ---------------- 深交所 (只有当前值 -> 快照) ----------------
-SNAP = os.path.join(HERE, "szse_snapshots.csv")
-def szse_current(code):
-    url = ("http://www.szse.cn/api/report/ShowReport/data?SHOWTYPE=JSON&CATALOGID=1945&TABKEY=tab1&PAGENO=1"
-           f"&txtQueryKeyAndJC={code}&random=0.{datetime.datetime.now().microsecond}")
-    try:
-        j = json.loads(http_get(url, referer="http://www.szse.cn/", timeout=15, retries=2))   # 本机偶尔失败重试一次; GitHub 服务器上会被拒
-        for r in j[0].get("data") or []:
-            import re
-            c = re.sub("<[^>]+>", "", r["sys_key"])
-            if c == code:
-                return float(r["dqgm"].replace(",", "")), j[0]["metadata"].get("subname")
-    except Exception as e:
-        print("  深交所接口失败:", code, e)
-    return None, None
-def szse_snapshot_take(day):
-    """把今天的深交所当前值记为 day 的快照 (只在晚间 23:00 后运行才代表当日)."""
-    snaps = szse_snapshot_load()
-    changed = False
-    for code, (name, ex, base, A) in ETF.items():
-        if ex != "SZSE": continue
-        val, asof = szse_current(code)
-        if val is None: continue
-        d = asof if asof and len(asof) == 10 else day
-        snaps.setdefault(d, {})[code] = val; changed = True
-    if changed:
-        with open(SNAP, "w", newline="", encoding="utf-8") as fh:
-            w = csv.writer(fh); w.writerow(["date", "code", "shares_wan"])
-            for d in sorted(snaps):
-                for code, v in sorted(snaps[d].items()): w.writerow([d, code, v])
-    return snaps
-def szse_snapshot_load():
-    snaps = {}
+# ---------------- 深交所 (历史份额接口, 最多查 6 个月; 数据中心 IP 会被拒 -> 用本地缓存 + 腾讯估算兜底) ----------------
+SNAP = os.path.join(HERE, "szse_snapshots.csv")   # 缓存: date, code, shares_wan, source(szse|tencent)
+SRC = {}
+def szse_hist(code, start, end):
+    """深交所 ETF规模 历史接口 (市场数据→基金数据→基金规模→ETF规模), 返回 {日期: 万份}."""
+    url = ("https://www.szse.cn/api/report/ShowReport/data?SHOWTYPE=JSON&CATALOGID=scsj_fund_jjgm&jjlb=ETF"
+           f"&txtDm={code}&txtStart={start}&txtEnd={end}&PAGENO=1&random=0.{datetime.datetime.now().microsecond}")
+    j = json.loads(http_get(url, referer="https://www.szse.cn/", timeout=15, retries=2))
+    return {r["size_date"]: float(str(r["current_size"]).replace(",", "")) for r in (j[0].get("data") or [])}
+def tencent_estimate(code):
+    """腾讯行情: 总市值(亿元, 两位小数)/价格 = 份额(亿份), 精度约 ±0.1 亿份; 返回 (万份, 行情日期)."""
+    b = http_get(f"https://qt.gtimg.cn/q=sz{code}", timeout=15, retries=2).decode("gbk", "ignore")
+    f = b.split("~"); price = float(f[3]); cap = float(f[44]); ts = f[30]
+    return round(cap / price * 1e4, 2), f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
+def szse_snapshot_load(with_source=False):
+    snaps = {}; src = {}
     if os.path.exists(SNAP):
         for r in csv.DictReader(open(SNAP, encoding="utf-8")):
             snaps.setdefault(r["date"], {})[r["code"]] = float(r["shares_wan"])
+            src.setdefault(r["date"], {})[r["code"]] = r.get("source") or "szse"
+    return (snaps, src) if with_source else snaps
+def szse_snapshot_save(snaps, src):
+    with open(SNAP, "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh); w.writerow(["date", "code", "shares_wan", "source"])
+        for d in sorted(snaps):
+            for code, v in sorted(snaps[d].items()): w.writerow([d, code, v, src.get(d, {}).get(code, "szse")])
+def szse_snapshot_take(day, days_back=20):
+    """用深交所历史接口刷新最近 days_back 天的精确值 (覆盖之前的估算值); 被拒时对 day 用腾讯估算兜底."""
+    snaps, src = szse_snapshot_load(True)
+    start = (datetime.date.fromisoformat(day) - datetime.timedelta(days=days_back)).isoformat()
+    ok = False
+    for code, (name, ex, base, A) in ETF.items():
+        if ex != "SZSE": continue
+        try:
+            for d, v in szse_hist(code, start, day).items():
+                snaps.setdefault(d, {})[code] = v; src.setdefault(d, {})[code] = "szse"; ok = True
+        except Exception as e:
+            print("  深交所历史接口失败:", code, str(e)[:60])
+    if not ok:
+        for code, (name, ex, base, A) in ETF.items():
+            if ex != "SZSE" or src.get(day, {}).get(code) == "szse": continue
+            try:
+                v, asof = tencent_estimate(code)
+                prev_days = sorted(d for d in snaps if d < day and code in snaps[d])
+                pv = snaps[prev_days[-1]][code] if prev_days else None
+                if asof == day and not (pv and abs(v - pv) / pv < 1e-5):   # 与前一日完全相同 = 深交所还没发布, 腾讯只是镜像旧值
+                    snaps.setdefault(day, {})[code] = v; src.setdefault(day, {})[code] = "tencent"
+                    print(f"  {code} 用腾讯估算 {v:.0f} 万份 (≈)")
+            except Exception as e:
+                print("  腾讯行情也失败:", code, str(e)[:60])
+    szse_snapshot_save(snaps, src)
     return snaps
 
 # ---------------- 中金所 ----------------
@@ -182,14 +197,18 @@ def main(day=None):
     lines += [f"## 行情判定", f"上证 {idx[[d for d, c in idx].index(max(d for d, c in idx if d <= day))][1]:.0f}，MA20 {ma20:.0f} → **{regime}**（3.0：下跌看 ETF 为主，上涨看期货为主）；MA360 {ma360:.0f}，{'在上方' if closes[-1] > ma360 else '已跌破'} {abs(closes[-1]/ma360-1)*100:.1f}%", ""]
 
     # ---- ETF ----
-    snaps = szse_snapshot_take(day) if day == today or day == (datetime.date.today() - datetime.timedelta(days=1)).isoformat() else szse_snapshot_load()
-    lines += ["## ETF 一级市场份额（一倍量 = 2025 年末峰值 × 0.1%）", "", "| 代码 | 标的 | 份额(亿份) | 变化(万份) | 倍量 | 方向 | 十倍量 | 汇金仓位区间 |", "|---|---|---|---|---|---|---|---|"]
+    global SRC
+    snaps = szse_snapshot_take(day)
+    SRC = szse_snapshot_load(True)[1]
+    lines += ["## ETF 一级市场份额（一倍量 = 2025 年末峰值 × 0.1%；≈ 表示深交所值来自腾讯总市值估算，精度约 ±0.1 亿份）", "", "| 代码 | 标的 | 份额(亿份) | 变化(万份) | 倍量 | 方向 | 十倍量 | 汇金仓位区间 |", "|---|---|---|---|---|---|---|---|"]
     mult = {}; n_ten_in = n_ten_out = 0; total = 0.0
     for code, (name, ex, base, A) in ETF.items():
+        approx = ""
         if ex == "SSE":
             cur = sh.get(code); pv = (sh_prev or {}).get(code)
         else:
             cur = snaps.get(day, {}).get(code); pv = snaps.get(prev, {}).get(code)
+            approx = "≈" if any(SRC.get(x, {}).get(code) == "tencent" for x in (day, prev)) else ""
         if cur is None:
             lines.append(f"| {code} | {name} | 无数据 | | | | | |"); continue
         if pv is None:
@@ -202,7 +221,7 @@ def main(day=None):
             total += m
             if m >= 10: n_ten_in += 1
             if m <= -10: n_ten_out += 1
-        lines.append(f"| {code} | {name} | {cur/1e4:.1f} | {chg:+,.0f} | {m:+.1f}x | {'申购' if chg>0 else '赎回' if chg<0 else '—'} | {ten} | {rng} |")
+        lines.append(f"| {code} | {name} | {cur/1e4:.1f} | {approx}{chg:+,.0f} | {approx}{m:+.1f}x | {'申购' if chg>0 else '赎回' if chg<0 else '—'} | {ten} | {rng} |")
     # 交叉验证 (取最坏情况)
     cross = []
     for a, b in TWIN.items():
@@ -232,7 +251,8 @@ def main(day=None):
     if all(fut.values()):
         # 到期周
         d0 = datetime.date.fromisoformat(day); exp = third_friday(d0.year, d0.month)
-        roll = 0 <= (exp - d0).days <= 7
+        p0 = datetime.date.fromisoformat(prev); exp_prev = third_friday(p0.year, p0.month)
+        roll = 0 <= (exp - d0).days <= 7 or (p0 <= exp_prev < d0)   # 到期周, 或到期后第一个交易日 (余额差法含摘牌合约)
         lines.append("| 品种 | 中信净空Δ(S−L) | 倍量(300手) | 中信ΔS | 中信ΔL | 中信净空持仓 | 前20 求和法净空Δ | 前20 余额差法 |")
         lines.append("|---|---|---|---|---|---|---|---|")
         zx_tot = 0; t20_sum = 0; t20_bal = 0; dS_tot = dL_tot = 0
@@ -255,7 +275,7 @@ def main(day=None):
         lines.append(f"中信四品种净空Δ合计 **{zx_tot:+d} 手**（ΔS {dS_tot:+d} / ΔL {dL_tot:+d}）；三日累计 {cumzx:+d} 手")
         lines.append(f"前 20 席位（机构）：求和法 {t20_sum:+d} 手，余额差法 **{t20_bal:+d} 手**；三日累计余额差 {cum20:+d} 手")
         fut_sig = "看涨" if dS_tot >= FUT_BIG and dL_tot < FUT_BIG else "看跌" if dL_tot >= FUT_BIG and dS_tot < FUT_BIG else "无"
-        lines.append(f"**期货信号（2.0 原文：空单 ≥5000 手看涨 / 多单 ≥5000 手看跌）：{fut_sig}**" + ("　⚠️ 到期周（%s 到期），双边平仓/移仓，数据失真" % exp if roll else ""))
+        lines.append(f"**期货信号（2.0 原文：空单 ≥5000 手看涨 / 多单 ≥5000 手看跌）：{fut_sig}**" + ("　⚠️ 到期周或到期次日（%s 到期），移仓/摘牌影响，数据失真" % (exp if (exp - d0).days >= 0 else exp_prev) if roll else ""))
     else:
         fut_sig = "无数据"; roll = False
         lines.append("中金所当日数据未出（收盘后 17:00 前后发布）")
@@ -271,8 +291,8 @@ def main(day=None):
     sys.stdout.reconfigure(encoding="utf-8"); print(text)
 
 if __name__ == "__main__":
-    if "--snapshot-only" in sys.argv:
+    if "--snapshot-only" in sys.argv or "--szse-only" in sys.argv:
         snaps = szse_snapshot_take(datetime.date.today().isoformat())
-        print("深交所快照:", {d: v for d, v in snaps.items() if d >= (datetime.date.today() - datetime.timedelta(days=2)).isoformat()})
+        print("深交所最近三天:", {d: v for d, v in snaps.items() if d >= (datetime.date.today() - datetime.timedelta(days=4)).isoformat()})
     else:
         main(next((a for a in sys.argv[1:] if not a.startswith("--")), None))

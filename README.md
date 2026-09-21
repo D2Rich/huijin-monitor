@@ -30,3 +30,12 @@ schtasks /Create /SC DAILY /TN "HuijinMonitor" /TR "\"E:\Claude\huijin_monitor\r
 
 ## 日报地址
 https://raw.githubusercontent.com/D2Rich/huijin-monitor/master/latest.md
+
+## 腾讯云函数（深交所，国内 IP，电脑可以关）
+`scf/index.py`：定时用深交所历史接口刷新 `szse_snapshots.csv` 并通过 GitHub API 写回仓库。
+1. GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate：Repository access 只选 huijin-monitor，Permissions → Contents = Read and write，生成后复制（只显示一次）。
+2. 腾讯云 → 云函数 SCF → 函数服务 → 新建 → 从头开始：地域 广州，运行环境 Python 3.10，内存 128MB，执行超时 120 秒。
+3. 在线编辑：把 `scf/index.py` 的内容粘到 index.py；执行方法保持 `index.main_handler`。
+4. 函数配置 → 环境变量：`GITHUB_TOKEN` = 第 1 步的 token。
+5. 触发管理 → 创建触发器 → 定时触发 → 自定义：`0 35 23 ? * MON-FRI *`；再建一个 `0 10 0 ? * TUE-SAT *`。
+6. 点"测试"跑一次，返回 `{'ok': True, ...}` 即成功；仓库会出现 "szse snapshot … via scf" 的提交。

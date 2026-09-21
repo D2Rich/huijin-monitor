@@ -84,7 +84,7 @@ def szse_current(code):
     url = ("http://www.szse.cn/api/report/ShowReport/data?SHOWTYPE=JSON&CATALOGID=1945&TABKEY=tab1&PAGENO=1"
            f"&txtQueryKeyAndJC={code}&random=0.{datetime.datetime.now().microsecond}")
     try:
-        j = json.loads(http_get(url, referer="http://www.szse.cn/", retries=1))   # GitHub 服务器上深交所会被拒, 不重试
+        j = json.loads(http_get(url, referer="http://www.szse.cn/", timeout=15, retries=2))   # 本机偶尔失败重试一次; GitHub 服务器上会被拒
         for r in j[0].get("data") or []:
             import re
             c = re.sub("<[^>]+>", "", r["sys_key"])

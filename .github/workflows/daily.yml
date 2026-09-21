@@ -24,5 +24,5 @@ jobs:
           git config user.name "huijin-bot"
           git config user.email "bot@users.noreply.github.com"
           git add latest.md reports szse_snapshots.csv
-          git commit -m "daily $(date -u +%F)" || echo "nothing to commit"
-          git push
+          git commit -m "daily $(date -u +%F)" || { echo "nothing to commit"; exit 0; }
+          for i in 1 2 3; do git pull --rebase -X theirs origin master && git push && break || sleep 20; done
